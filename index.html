@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stream Quest Idle</title>
+    <link rel="stylesheet" href="styles.css">
+    <script type="importmap">
+        {
+            "imports": {
+                "pako": "https://esm.sh/pako",
+                "idb": "https://esm.sh/idb",
+                "tmi.js": "/tmi.js"
+            }
+        }
+    </script>
+    <script src="/tmi.js"></script> <!-- Fallback load for global scope if needed by library quirk -->
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header>
+            <div class="header-left">
+                <img src="logo.png" alt="Stream Quest" class="logo">
+            </div>
+            
+            <div class="header-center" id="active-task-container" style="display: none;">
+                <div class="task-info">
+                    <span id="task-label">Chopping Oak</span>
+                    <div class="progress-wrapper">
+                        <img id="task-icon" src="woodcutting_icon.png" alt="Task">
+                        <div class="progress-bar-bg">
+                            <div id="task-progress" class="progress-bar-fill"></div>
+                        </div>
+                        <button id="stop-btn">STOP</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="header-right">
+                <!-- Host Twitch Channel Bar (only shown for creator/host) -->
+                <div id="host-controls" class="host-top-bar" style="display:none;">
+                    <input type="text" id="twitch-channel-input" placeholder="Twitch channel">
+                    <button id="connect-twitch-btn">Connect</button>
+                    <span id="tmi-status">Status: Disconnected</span>
+                </div>
+
+                <!-- Host user dropdown (only shown for creator/host) -->
+                <div class="host-user-menu" id="host-user-menu" style="display:none;">
+                    <button id="host-user-btn" class="host-user-btn">
+                        Users ▾
+                    </button>
+                    <div id="host-user-dropdown" class="dropdown-panel" style="display:none;">
+                        <div class="dropdown-section">
+                            <div class="dropdown-section-title">Realtime Users</div>
+                            <ul id="realtime-users-list" class="dropdown-list"></ul>
+                        </div>
+                        <div class="dropdown-section">
+                            <div class="dropdown-section-title">Twitch Users</div>
+                            <ul id="twitch-users-list" class="dropdown-list"></ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="energy-display" id="energy-display">
+                    <img src="energy_icon.png" alt="Energy">
+                    <span id="energy-count">0/12</span>
+                    <div class="energy-cell-bar-bg" id="energy-cell-bar-bg">
+                        <div id="energy-cell-bar" class="energy-cell-bar-fill"></div>
+                    </div>
+                </div>
+                <div class="user-info" id="user-info">
+                    <button id="link-account-btn" class="primary-btn small-primary-btn">Link Twitch Account</button>
+                    <img id="user-avatar" src="" alt="">
+                    <span id="username">Guest</span>
+                    <div id="client-user-dropdown" class="dropdown-panel client-user-dropdown" style="display:none;">
+                        <div class="dropdown-section">
+                            <div class="dropdown-section-title">Account</div>
+                            <ul class="dropdown-list">
+                                <li><span class="user-name">Option 1</span></li>
+                                <li><span class="user-name">Option 2</span></li>
+                                <li>
+                                    <button id="client-delink-btn" class="small-btn danger-btn">De-Link</button>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content Grid -->
+        <main>
+            <!-- Sidebar Skills -->
+            <aside class="skills-sidebar">
+                <h2>Skills</h2>
+                <div id="skills-list">
+                    <!-- Populated by JS -->
+                </div>
+            </aside>
+
+            <!-- Content Area -->
+            <section class="content-area">
+                
+                <!-- Login/Link Overlay (Triggered by top-right button) -->
+                <div id="auth-overlay" class="overlay" style="display:none;">
+                    <div class="card auth-card">
+                        <h2>Connect Account</h2>
+                        <p>Link your Twitch account to start collecting energy and resources.</p>
+                        <div id="link-instructions">
+                            <p>Type this command in the Twitch Chat:</p>
+                            <div class="code-box">!link <span id="link-code">...</span></div>
+                            <p id="global-link-copy-status" class="copy-status"></p>
+                            <p>Waiting for validation...</p>
+                        </div>
+                        <p id="auth-status"></p>
+                    </div>
+                </div>
+
+                <!-- Skill Details (Hidden until logged in/clicked) -->
+                <div id="skill-details" style="display:none;">
+                    <div class="skill-header">
+                        <img id="detail-icon" src="" alt="">
+                        <div>
+                            <h1 id="detail-name">Skill Name</h1>
+                            <p id="detail-desc">Description...</p>
+                        </div>
+                    </div>
+                    
+                    <div class="task-grid" id="task-grid">
+                        <!-- Tasks populated here -->
+                    </div>
+                </div>
+
+            </section>
+
+            <!-- Inventory Sidebar -->
+            <aside class="inventory-sidebar">
+                <h2>Inventory</h2>
+                <ul id="inventory-list" class="inventory-list">
+                    <!-- Populated by JS -->
+                </ul>
+            </aside>
+        </main>
+
+        <!-- Host Console (Host only) -->
+        <div id="host-console-container" class="host-console" style="display:none;">
+            <div class="host-console-header">
+                <span>Host Console</span>
+                <div class="host-data-controls">
+                    <button id="export-data-btn" class="small-btn">Export JSON</button>
+                    <button id="import-data-btn" class="small-btn">Import JSON</button>
+                    <input type="file" id="import-data-input" accept="application/json" style="display:none;">
+                </div>
+            </div>
+            <div id="host-console-log" class="host-console-log"></div>
+        </div>
+    </div>
+
+    <script type="module" src="src/main.js"></script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
