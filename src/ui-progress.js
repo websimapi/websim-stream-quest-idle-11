@@ -5,10 +5,13 @@ export function startProgressLoop(uiManager, taskData) {
 
     // Find Task Info
     let taskDef = null;
-    for (const s of Object.values(SKILLS)) {
-        const t = s.tasks.find((t) => t.id === taskData.taskId);
+    let owningSkill = null;
+
+    for (const skill of Object.values(SKILLS)) {
+        const t = skill.tasks.find((t) => t.id === taskData.taskId);
         if (t) {
             taskDef = t;
+            owningSkill = skill;
             break;
         }
     }
@@ -16,6 +19,14 @@ export function startProgressLoop(uiManager, taskData) {
     if (!taskDef) return;
 
     document.getElementById('task-label').innerText = taskDef.name;
+
+    // Update the active task icon to match the skill's icon
+    const taskIconEl = document.getElementById('task-icon');
+    if (taskIconEl && owningSkill && owningSkill.icon) {
+        taskIconEl.src = owningSkill.icon;
+        taskIconEl.alt = owningSkill.name;
+    }
+
     const fill = document.getElementById('task-progress');
 
     uiManager.activeTaskInterval = setInterval(() => {
