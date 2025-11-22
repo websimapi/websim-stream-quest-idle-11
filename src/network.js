@@ -250,87 +250,95 @@ export class NetworkManager {
             const parts = lowerMsg.split(/\s+/);
             const arg = (parts[1] || '').trim();
 
-            if (player.activeTask) {
-                appendHostLog(`!chop from ${username} ignored: task already in progress (${player.activeTask.taskId}).`);
+            const woodSkill = SKILLS.woodcutting;
+            const totalXp = computeSkillXp(player, woodSkill.id);
+            const levelInfo = getLevelInfo(totalXp);
+            const playerLevel = levelInfo.level;
+
+            let targetTask = null;
+
+            if (!arg) {
+                // Highest task they meet the level requirement for
+                const candidates = woodSkill.tasks
+                    .filter(t => playerLevel >= (t.level || 1))
+                    .sort((a, b) => (b.level || 1) - (a.level || 1));
+                targetTask = candidates[0] || null;
+            } else if (arg === 'oak') {
+                targetTask = woodSkill.tasks.find(t => t.id === 'wc_oak') || null;
+            } else if (arg === 'willow') {
+                targetTask = woodSkill.tasks.find(t => t.id === 'wc_willow') || null;
+            } else if (arg === 'maple') {
+                targetTask = woodSkill.tasks.find(t => t.id === 'wc_maple') || null;
             } else {
-                const woodSkill = SKILLS.woodcutting;
-                const totalXp = computeSkillXp(player, woodSkill.id);
-                const levelInfo = getLevelInfo(totalXp);
-                const playerLevel = levelInfo.level;
+                appendHostLog(`!chop from ${username} ignored: unknown tree "${arg}".`);
+            }
 
-                let targetTask = null;
-
-                if (!arg) {
-                    // Highest task they meet the level requirement for
-                    const candidates = woodSkill.tasks
-                        .filter(t => playerLevel >= (t.level || 1))
-                        .sort((a, b) => (b.level || 1) - (a.level || 1));
-                    targetTask = candidates[0] || null;
-                } else if (arg === 'oak') {
-                    targetTask = woodSkill.tasks.find(t => t.id === 'wc_oak') || null;
-                } else if (arg === 'willow') {
-                    targetTask = woodSkill.tasks.find(t => t.id === 'wc_willow') || null;
-                } else if (arg === 'maple') {
-                    targetTask = woodSkill.tasks.find(t => t.id === 'wc_maple') || null;
+            if (!targetTask) {
+                appendHostLog(`!chop from ${username} failed: no eligible woodcutting task for level ${playerLevel}.`);
+            } else if (playerLevel < (targetTask.level || 1)) {
+                appendHostLog(
+                    `!chop from ${username} denied: level ${playerLevel} < required ${targetTask.level} for "${targetTask.name}".`
+                );
+            } else {
+                const totalAvailable = getAvailableEnergyCount(player);
+                if (totalAvailable <= 0) {
+                    appendHostLog(`!chop from ${username} denied: no energy (pool empty and no active cell).`);
                 } else {
-                    appendHostLog(`!chop from ${username} ignored: unknown tree "${arg}".`);
-                }
+                    const previousTaskId = player.activeTask?.taskId || null;
 
-                if (!targetTask) {
-                    appendHostLog(`!chop from ${username} failed: no eligible woodcutting task for level ${playerLevel}.`);
-                } else if (playerLevel < (targetTask.level || 1)) {
-                    appendHostLog(
-                        `!chop from ${username} denied: level ${playerLevel} < required ${targetTask.level} for "${targetTask.name}".`
-                    );
-                } else {
-                    const totalAvailable = getAvailableEnergyCount(player);
-                    if (totalAvailable <= 0) {
-                        appendHostLog(`!chop from ${username} denied: no energy (pool empty and no active cell).`);
-                    } else {
-                        // Ensure an active energy cell
-                        const hasActiveEnergy =
-                            player.activeEnergy &&
-                            (typeof player.activeEnergy.consumedMs === 'number'
-                                ? player.activeEnergy.consumedMs < ONE_HOUR_MS
-                                : true);
+                    // Ensure an active energy cell
+                    const hasActiveEnergy =
+                        player.activeEnergy &&
+                        (typeof player.activeEnergy.consumedMs === 'number'
+                            ? player.activeEnergy.consumedMs < ONE_HOUR_MS
+                            : true);
 
-                        if (!hasActiveEnergy) {
-                            if (player.energy.length > 0) {
-                                player.energy.shift(); // consume stored energy
-                                player.activeEnergy = { consumedMs: 0 };
-                                appendHostLog(`Energy cell activated for ${username} (1h of active time).`);
-                            } else {
-                                appendHostLog(
-                                    `!chop from ${username} denied: race condition left no stored energy.`
-                                );
-                                await savePlayer(twitchId, player);
-                                this.refreshPlayerList();
-                                return;
-                            }
+                    if (!hasActiveEnergy) {
+                        if (player.energy.length > 0) {
+                            player.energy.shift(); // consume stored energy
+                            player.activeEnergy = { consumedMs: 0 };
+                            appendHostLog(`Energy cell activated for ${username} (1h of active time).`);
+                        } else {
+                            appendHostLog(
+                                `!chop from ${username} denied: race condition left no stored energy.`
+                            );
+                            await savePlayer(twitchId, player);
+                            this.refreshPlayerList();
+                            return;
                         }
+                    }
 
-                        // Start the task
-                        player.activeTask = {
-                            taskId: targetTask.id,
-                            startTime: now,
-                            duration: targetTask.duration
-                        };
-                        // Clear paused/manual stop state
-                        player.pausedTask = null;
-                        player.manualStop = false;
+                    // Switch to the new task (or start fresh if none was running)
+                    player.activeTask = {
+                        taskId: targetTask.id,
+                        startTime: now,
+                        duration: targetTask.duration
+                    };
+                    player.pausedTask = null;
+                    player.manualStop = false;
 
-                        await savePlayer(twitchId, player);
+                    await savePlayer(twitchId, player);
+
+                    if (previousTaskId && previousTaskId !== targetTask.id) {
+                        appendHostLog(
+                            `!chop from ${username}: switched from "${previousTaskId}" to "${targetTask.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
+                        );
+                    } else if (previousTaskId && previousTaskId === targetTask.id) {
+                        appendHostLog(
+                            `!chop from ${username}: restarted "${targetTask.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
+                        );
+                    } else {
                         appendHostLog(
                             `!chop from ${username}: started "${targetTask.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
                         );
+                    }
 
-                        if (player.linkedWebsimId) {
-                            this.room.send({
-                                type: 'state_update',
-                                targetId: player.linkedWebsimId,
-                                playerData: player
-                            });
-                        }
+                    if (player.linkedWebsimId) {
+                        this.room.send({
+                            type: 'state_update',
+                            targetId: player.linkedWebsimId,
+                            playerData: player
+                        });
                     }
                 }
             }
@@ -339,9 +347,7 @@ export class NetworkManager {
             const scavSkill = SKILLS.scavenging;
             const task = scavSkill.tasks.find(t => t.id === 'sc_trash');
 
-            if (player.activeTask) {
-                appendHostLog(`!sift from ${username} ignored: task already in progress (${player.activeTask.taskId}).`);
-            } else if (!task) {
+            if (!task) {
                 appendHostLog(`!sift from ${username} failed: task definition missing (sc_trash).`);
             } else {
                 const totalXp = computeSkillXp(player, scavSkill.id);
@@ -357,6 +363,8 @@ export class NetworkManager {
                     if (totalAvailable <= 0) {
                         appendHostLog(`!sift from ${username} denied: no energy (pool empty and no active cell).`);
                     } else {
+                        const previousTaskId = player.activeTask?.taskId || null;
+
                         const hasActiveEnergy =
                             player.activeEnergy &&
                             (typeof player.activeEnergy.consumedMs === 'number'
@@ -387,9 +395,20 @@ export class NetworkManager {
                         player.manualStop = false;
 
                         await savePlayer(twitchId, player);
-                        appendHostLog(
-                            `!sift from ${username}: started "${task.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
-                        );
+
+                        if (previousTaskId && previousTaskId !== task.id) {
+                            appendHostLog(
+                                `!sift from ${username}: switched from "${previousTaskId}" to "${task.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
+                            );
+                        } else if (previousTaskId && previousTaskId === task.id) {
+                            appendHostLog(
+                                `!sift from ${username}: restarted "${task.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
+                            );
+                        } else {
+                            appendHostLog(
+                                `!sift from ${username}: started "${task.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
+                            );
+                        }
 
                         if (player.linkedWebsimId) {
                             this.room.send({
@@ -406,9 +425,7 @@ export class NetworkManager {
             const scavSkill = SKILLS.scavenging;
             const task = scavSkill.tasks.find(t => t.id === 'sc_ruins');
 
-            if (player.activeTask) {
-                appendHostLog(`!explore from ${username} ignored: task already in progress (${player.activeTask.taskId}).`);
-            } else if (!task) {
+            if (!task) {
                 appendHostLog(`!explore from ${username} failed: task definition missing (sc_ruins).`);
             } else {
                 const totalXp = computeSkillXp(player, scavSkill.id);
@@ -424,6 +441,8 @@ export class NetworkManager {
                     if (totalAvailable <= 0) {
                         appendHostLog(`!explore from ${username} denied: no energy (pool empty and no active cell).`);
                     } else {
+                        const previousTaskId = player.activeTask?.taskId || null;
+
                         const hasActiveEnergy =
                             player.activeEnergy &&
                             (typeof player.activeEnergy.consumedMs === 'number'
@@ -454,9 +473,20 @@ export class NetworkManager {
                         player.manualStop = false;
 
                         await savePlayer(twitchId, player);
-                        appendHostLog(
-                            `!explore from ${username}: started "${task.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
-                        );
+
+                        if (previousTaskId && previousTaskId !== task.id) {
+                            appendHostLog(
+                                `!explore from ${username}: switched from "${previousTaskId}" to "${task.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
+                            );
+                        } else if (previousTaskId && previousTaskId === task.id) {
+                            appendHostLog(
+                                `!explore from ${username}: restarted "${task.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
+                            );
+                        } else {
+                            appendHostLog(
+                                `!explore from ${username}: started "${task.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
+                            );
+                        }
 
                         if (player.linkedWebsimId) {
                             this.room.send({
@@ -473,9 +503,7 @@ export class NetworkManager {
             const scavSkill = SKILLS.scavenging;
             const task = scavSkill.tasks.find(t => t.id === 'sc_tech');
 
-            if (player.activeTask) {
-                appendHostLog(`!salvage from ${username} ignored: task already in progress (${player.activeTask.taskId}).`);
-            } else if (!task) {
+            if (!task) {
                 appendHostLog(`!salvage from ${username} failed: task definition missing (sc_tech).`);
             } else {
                 const totalXp = computeSkillXp(player, scavSkill.id);
@@ -491,6 +519,8 @@ export class NetworkManager {
                     if (totalAvailable <= 0) {
                         appendHostLog(`!salvage from ${username} denied: no energy (pool empty and no active cell).`);
                     } else {
+                        const previousTaskId = player.activeTask?.taskId || null;
+
                         const hasActiveEnergy =
                             player.activeEnergy &&
                             (typeof player.activeEnergy.consumedMs === 'number'
@@ -521,9 +551,20 @@ export class NetworkManager {
                         player.manualStop = false;
 
                         await savePlayer(twitchId, player);
-                        appendHostLog(
-                            `!salvage from ${username}: started "${task.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
-                        );
+
+                        if (previousTaskId && previousTaskId !== task.id) {
+                            appendHostLog(
+                                `!salvage from ${username}: switched from "${previousTaskId}" to "${task.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
+                            );
+                        } else if (previousTaskId && previousTaskId === task.id) {
+                            appendHostLog(
+                                `!salvage from ${username}: restarted "${task.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
+                            );
+                        } else {
+                            appendHostLog(
+                                `!salvage from ${username}: started "${task.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
+                            );
+                        }
 
                         if (player.linkedWebsimId) {
                             this.room.send({
@@ -562,83 +603,92 @@ export class NetworkManager {
                 requested = 'shark';
             }
 
-            if (player.activeTask) {
-                appendHostLog(`${baseCmd} from ${username} ignored: task already in progress (${player.activeTask.taskId}).`);
+            const totalXp = computeSkillXp(player, fishSkill.id);
+            const levelInfo = getLevelInfo(totalXp);
+            const playerLevel = levelInfo.level;
+
+            let targetTask = null;
+
+            if (!requested) {
+                // Highest fish they meet the level requirement for
+                const candidates = fishSkill.tasks
+                    .filter(t => playerLevel >= (t.level || 1))
+                    .sort((a, b) => (b.level || 1) - (a.level || 1));
+                targetTask = candidates[0] || null;
+            } else if (requested === 'shrimp') {
+                targetTask = fishSkill.tasks.find(t => t.id === 'fi_shrimp') || null;
+            } else if (requested === 'trout') {
+                targetTask = fishSkill.tasks.find(t => t.id === 'fi_trout') || null;
+            } else if (requested === 'shark') {
+                targetTask = fishSkill.tasks.find(t => t.id === 'fi_shark') || null;
             } else {
-                const totalXp = computeSkillXp(player, fishSkill.id);
-                const levelInfo = getLevelInfo(totalXp);
-                const playerLevel = levelInfo.level;
+                appendHostLog(`${baseCmd} from ${username} ignored: unknown fish "${requested}".`);
+            }
 
-                let targetTask = null;
-
-                if (!requested) {
-                    // Highest fish they meet the level requirement for
-                    const candidates = fishSkill.tasks
-                        .filter(t => playerLevel >= (t.level || 1))
-                        .sort((a, b) => (b.level || 1) - (a.level || 1));
-                    targetTask = candidates[0] || null;
-                } else if (requested === 'shrimp') {
-                    targetTask = fishSkill.tasks.find(t => t.id === 'fi_shrimp') || null;
-                } else if (requested === 'trout') {
-                    targetTask = fishSkill.tasks.find(t => t.id === 'fi_trout') || null;
-                } else if (requested === 'shark') {
-                    targetTask = fishSkill.tasks.find(t => t.id === 'fi_shark') || null;
+            if (!targetTask) {
+                appendHostLog(`${baseCmd} from ${username} failed: no eligible fishing task for level ${playerLevel}.`);
+            } else if (playerLevel < (targetTask.level || 1)) {
+                appendHostLog(
+                    `${baseCmd} from ${username} denied: level ${playerLevel} < required ${targetTask.level} for "${targetTask.name}".`
+                );
+            } else {
+                const totalAvailable = getAvailableEnergyCount(player);
+                if (totalAvailable <= 0) {
+                    appendHostLog(`${baseCmd} from ${username} denied: no energy (pool empty and no active cell).`);
                 } else {
-                    appendHostLog(`${baseCmd} from ${username} ignored: unknown fish "${requested}".`);
-                }
+                    const previousTaskId = player.activeTask?.taskId || null;
 
-                if (!targetTask) {
-                    appendHostLog(`${baseCmd} from ${username} failed: no eligible fishing task for level ${playerLevel}.`);
-                } else if (playerLevel < (targetTask.level || 1)) {
-                    appendHostLog(
-                        `${baseCmd} from ${username} denied: level ${playerLevel} < required ${targetTask.level} for "${targetTask.name}".`
-                    );
-                } else {
-                    const totalAvailable = getAvailableEnergyCount(player);
-                    if (totalAvailable <= 0) {
-                        appendHostLog(`${baseCmd} from ${username} denied: no energy (pool empty and no active cell).`);
-                    } else {
-                        const hasActiveEnergy =
-                            player.activeEnergy &&
-                            (typeof player.activeEnergy.consumedMs === 'number'
-                                ? player.activeEnergy.consumedMs < ONE_HOUR_MS
-                                : true);
+                    const hasActiveEnergy =
+                        player.activeEnergy &&
+                        (typeof player.activeEnergy.consumedMs === 'number'
+                            ? player.activeEnergy.consumedMs < ONE_HOUR_MS
+                            : true);
 
-                        if (!hasActiveEnergy) {
-                            if (player.energy.length > 0) {
-                                player.energy.shift();
-                                player.activeEnergy = { consumedMs: 0 };
-                                appendHostLog(`Energy cell activated for ${username} (1h of active time).`);
-                            } else {
-                                appendHostLog(
-                                    `${baseCmd} from ${username} denied: race condition left no stored energy.`
-                                );
-                                await savePlayer(twitchId, player);
-                                this.refreshPlayerList();
-                                return;
-                            }
+                    if (!hasActiveEnergy) {
+                        if (player.energy.length > 0) {
+                            player.energy.shift();
+                            player.activeEnergy = { consumedMs: 0 };
+                            appendHostLog(`Energy cell activated for ${username} (1h of active time).`);
+                        } else {
+                            appendHostLog(
+                                `${baseCmd} from ${username} denied: race condition left no stored energy.`
+                            );
+                            await savePlayer(twitchId, player);
+                            this.refreshPlayerList();
+                            return;
                         }
+                    }
 
-                        player.activeTask = {
-                            taskId: targetTask.id,
-                            startTime: now,
-                            duration: targetTask.duration
-                        };
-                        player.pausedTask = null;
-                        player.manualStop = false;
+                    player.activeTask = {
+                        taskId: targetTask.id,
+                        startTime: now,
+                        duration: targetTask.duration
+                    };
+                    player.pausedTask = null;
+                    player.manualStop = false;
 
-                        await savePlayer(twitchId, player);
+                    await savePlayer(twitchId, player);
+
+                    if (previousTaskId && previousTaskId !== targetTask.id) {
+                        appendHostLog(
+                            `${baseCmd} from ${username}: switched from "${previousTaskId}" to "${targetTask.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
+                        );
+                    } else if (previousTaskId && previousTaskId === targetTask.id) {
+                        appendHostLog(
+                            `${baseCmd} from ${username}: restarted "${targetTask.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
+                        );
+                    } else {
                         appendHostLog(
                             `${baseCmd} from ${username}: started "${targetTask.name}" (using active energy cell, ${getAvailableEnergyCount(player)}/12 total).`
                         );
+                    }
 
-                        if (player.linkedWebsimId) {
-                            this.room.send({
-                                type: 'state_update',
-                                targetId: player.linkedWebsimId,
-                                playerData: player
-                            });
-                        }
+                    if (player.linkedWebsimId) {
+                        this.room.send({
+                            type: 'state_update',
+                            targetId: player.linkedWebsimId,
+                            playerData: player
+                        });
                     }
                 }
             }
